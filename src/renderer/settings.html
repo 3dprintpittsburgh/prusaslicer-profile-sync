@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PrusaSlicer Profile Sync — Settings</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .settings-window {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      padding: 20px 24px;
+    }
+
+    .settings-body {
+      flex: 1;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .settings-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      padding-top: 14px;
+      margin-top: 12px;
+      border-top: 1px solid var(--border-color);
+      flex-shrink: 0;
+    }
+
+    .settings-saved-msg {
+      font-size: 0.85rem;
+      color: var(--success);
+      margin-right: auto;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .settings-saved-msg.visible {
+      opacity: 1;
+    }
+
+    .interval-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .interval-row .form-input {
+      width: 80px;
+      text-align: center;
+    }
+
+    .interval-row .unit-label {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .note-box {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 8px 12px;
+      margin-top: 8px;
+      line-height: 1.5;
+    }
+
+    .profiles-loading {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      padding: 12px 0;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="settings-window">
+    <!-- Header -->
+    <div class="window-header">
+      <h1>Settings</h1>
+    </div>
+
+    <!-- Scrollable Body -->
+    <div class="settings-body">
+
+      <!-- Repository -->
+      <div class="section">
+        <div class="section-title">Repository</div>
+
+        <div class="form-group">
+          <label for="repo-url">GitHub Repository URL</label>
+          <input type="text" id="repo-url" class="form-input" spellcheck="false"
+            placeholder="https://github.com/user/repo.git">
+        </div>
+
+        <div class="form-group">
+          <label for="github-token">GitHub Personal Access Token</label>
+          <div class="password-wrapper">
+            <input type="password" id="github-token" class="form-input" spellcheck="false"
+              placeholder="ghp_xxxxxxxxxxxxxxxxxxxx">
+            <button type="button" class="password-toggle" id="token-toggle" title="Show/hide token">
+              &#128065;
+            </button>
+          </div>
+          <div class="form-hint">
+            Create at <a href="https://github.com/settings/tokens">github.com/settings/tokens</a> — needs <strong>repo</strong> scope
+          </div>
+        </div>
+
+        <div class="note-box">
+          Any GitHub user with access to this repo can sync profiles using their own token.
+        </div>
+      </div>
+
+      <!-- PrusaSlicer Directory -->
+      <div class="section">
+        <div class="section-title">PrusaSlicer Directory</div>
+
+        <div class="form-group">
+          <label for="prusa-dir">Data Directory</label>
+          <div class="form-row">
+            <input type="text" id="prusa-dir" class="form-input" spellcheck="false"
+              placeholder="/path/to/PrusaSlicer">
+            <button type="button" id="browse-btn" class="btn btn-secondary">Browse</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sync Settings -->
+      <div class="section">
+        <div class="section-title">Sync Settings</div>
+
+        <div class="form-group">
+          <label>Sync Interval</label>
+          <div class="interval-row">
+            <input type="number" id="sync-interval" class="form-input form-input-number"
+              min="10" max="300" step="5">
+            <span class="unit-label">seconds</span>
+          </div>
+          <div class="form-hint">How often to check for remote changes (10-300 seconds)</div>
+        </div>
+
+        <label class="toggle-label">
+          <span class="toggle-text">Launch on startup</span>
+          <input type="checkbox" id="launch-startup" class="toggle-input">
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+
+        <label class="toggle-label">
+          <span class="toggle-text">Show notifications</span>
+          <input type="checkbox" id="show-notifications" class="toggle-input">
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+      </div>
+
+      <!-- Tracked Profiles -->
+      <div class="section">
+        <div class="section-title">Tracked Profiles</div>
+
+        <div id="profiles-loading" class="profiles-loading">Loading profiles...</div>
+        <div id="profiles-container" class="hidden">
+
+          <!-- Printer Profiles -->
+          <div class="profile-section" data-type="printer">
+            <div class="collapsible-header" id="header-printer">
+              <span class="collapsible-arrow">&#9654;</span>
+              <span class="collapsible-title">Printer</span>
+              <span class="count-badge" id="count-printer">0</span>
+            </div>
+            <div class="collapsible-body" id="body-printer">
+              <div class="collapsible-actions">
+                <a href="#" data-action="select-all" data-type="printer">Select All</a>
+                <a href="#" data-action="deselect-all" data-type="printer">Deselect All</a>
+              </div>
+              <div class="profile-list" id="list-printer"></div>
+            </div>
+          </div>
+
+          <!-- Print Profiles -->
+          <div class="profile-section" data-type="print">
+            <div class="collapsible-header" id="header-print">
+              <span class="collapsible-arrow">&#9654;</span>
+              <span class="collapsible-title">Print</span>
+              <span class="count-badge" id="count-print">0</span>
+            </div>
+            <div class="collapsible-body" id="body-print">
+              <div class="collapsible-actions">
+                <a href="#" data-action="select-all" data-type="print">Select All</a>
+                <a href="#" data-action="deselect-all" data-type="print">Deselect All</a>
+              </div>
+              <div class="profile-list" id="list-print"></div>
+            </div>
+          </div>
+
+          <!-- Filament Profiles -->
+          <div class="profile-section" data-type="filament">
+            <div class="collapsible-header" id="header-filament">
+              <span class="collapsible-arrow">&#9654;</span>
+              <span class="collapsible-title">Filament</span>
+              <span class="count-badge" id="count-filament">0</span>
+            </div>
+            <div class="collapsible-body" id="body-filament">
+              <div class="collapsible-actions">
+                <a href="#" data-action="select-all" data-type="filament">Select All</a>
+                <a href="#" data-action="deselect-all" data-type="filament">Deselect All</a>
+              </div>
+              <div class="profile-list" id="list-filament"></div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Footer -->
+    <div class="settings-footer">
+      <span id="saved-msg" class="settings-saved-msg">Settings saved</span>
+      <button type="button" id="cancel-btn" class="btn btn-secondary">Cancel</button>
+      <button type="button" id="save-btn" class="btn btn-primary">Save</button>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      // ── DOM References ─────────────────────────────────────────────────
+      const repoUrlInput = document.getElementById('repo-url');
+      const tokenInput = document.getElementById('github-token');
+      const tokenToggle = document.getElementById('token-toggle');
+      const dirInput = document.getElementById('prusa-dir');
+      const browseBtn = document.getElementById('browse-btn');
+      const intervalInput = document.getElementById('sync-interval');
+      const launchCheckbox = document.getElementById('launch-startup');
+      const notifCheckbox = document.getElementById('show-notifications');
+
+      const profilesLoading = document.getElementById('profiles-loading');
+      const profilesContainer = document.getElementById('profiles-container');
+
+      const saveBtn = document.getElementById('save-btn');
+      const cancelBtn = document.getElementById('cancel-btn');
+      const savedMsg = document.getElementById('saved-msg');
+
+      let originalConfig = {};
+      let allProfiles = { printer: [], filament: [], print: [] };
+      let trackedProfiles = { printer: [], filament: [], print: [] };
+
+      // ── Load Config & Profiles ─────────────────────────────────────────
+      async function init() {
+        try {
+          const [config, localProfiles, remoteProfiles] = await Promise.all([
+            window.api.getConfig(),
+            window.api.getAvailableProfiles(),
+            window.api.getRemoteProfiles()
+          ]);
+
+          originalConfig = config;
+
+          // Fill form fields
+          repoUrlInput.value = config.repoUrl || '';
+          tokenInput.value = config.githubToken || '';
+          dirInput.value = config.prusaslicerDataDir || '';
+          intervalInput.value = config.syncIntervalSeconds || 30;
+          launchCheckbox.checked = !!config.launchOnStartup;
+          notifCheckbox.checked = config.showNotifications !== false;
+
+          // Merge local + remote profile lists (deduplicated)
+          trackedProfiles = config.trackedProfiles || { printer: [], filament: [], print: [] };
+
+          var types = ['printer', 'filament', 'print'];
+          for (var i = 0; i < types.length; i++) {
+            var type = types[i];
+            var localList = (localProfiles && localProfiles[type]) || [];
+            var remoteList = (remoteProfiles && remoteProfiles[type]) || [];
+            var merged = new Set(localList.concat(remoteList));
+            allProfiles[type] = Array.from(merged).sort();
+          }
+
+          renderProfiles();
+          profilesLoading.classList.add('hidden');
+          profilesContainer.classList.remove('hidden');
+        } catch (err) {
+          console.error('Failed to load settings:', err);
+          profilesLoading.textContent = 'Failed to load profiles.';
+        }
+      }
+
+      // ── Render Profile Checkboxes ──────────────────────────────────────
+      function renderProfiles() {
+        var types = ['printer', 'filament', 'print'];
+
+        for (var i = 0; i < types.length; i++) {
+          var type = types[i];
+          var list = document.getElementById('list-' + type);
+          var countBadge = document.getElementById('count-' + type);
+          var profiles = allProfiles[type] || [];
+          var tracked = trackedProfiles[type] || [];
+
+          if (profiles.length === 0) {
+            list.innerHTML = '<div class="text-muted text-sm" style="padding: 8px;">No profiles found</div>';
+            countBadge.textContent = '0';
+            continue;
+          }
+
+          var html = '';
+          for (var j = 0; j < profiles.length; j++) {
+            var name = profiles[j];
+            var isChecked = tracked.indexOf(name) !== -1;
+            var id = 'profile-' + type + '-' + j;
+            html += '<label class="checkbox-label" for="' + id + '">'
+              + '<input type="checkbox" class="checkbox-input" id="' + id + '"'
+              + ' data-profile-type="' + type + '" data-profile-name="' + escapeAttr(name) + '"'
+              + (isChecked ? ' checked' : '') + '>'
+              + '<span>' + escapeHtml(name) + '</span>'
+              + '</label>';
+          }
+
+          list.innerHTML = html;
+          updateCount(type);
+        }
+      }
+
+      function updateCount(type) {
+        var checkboxes = document.querySelectorAll('#list-' + type + ' .checkbox-input');
+        var checkedCount = 0;
+        for (var i = 0; i < checkboxes.length; i++) {
+          if (checkboxes[i].checked) checkedCount++;
+        }
+        document.getElementById('count-' + type).textContent = checkedCount + '/' + checkboxes.length;
+      }
+
+      // ── Collapsible Sections ───────────────────────────────────────────
+      var headers = document.querySelectorAll('.collapsible-header');
+      for (var h = 0; h < headers.length; h++) {
+        headers[h].addEventListener('click', function () {
+          var type = this.id.replace('header-', '');
+          var body = document.getElementById('body-' + type);
+          this.classList.toggle('open');
+          body.classList.toggle('open');
+        });
+      }
+
+      // ── Select All / Deselect All ──────────────────────────────────────
+      document.addEventListener('click', function (e) {
+        var action = e.target.getAttribute('data-action');
+        if (!action) return;
+        e.preventDefault();
+
+        var type = e.target.getAttribute('data-type');
+        var checkboxes = document.querySelectorAll('#list-' + type + ' .checkbox-input');
+        var checked = action === 'select-all';
+
+        for (var i = 0; i < checkboxes.length; i++) {
+          checkboxes[i].checked = checked;
+        }
+
+        updateCount(type);
+      });
+
+      // Update count badges when checkboxes change
+      document.addEventListener('change', function (e) {
+        if (e.target.classList.contains('checkbox-input') && e.target.getAttribute('data-profile-type')) {
+          updateCount(e.target.getAttribute('data-profile-type'));
+        }
+      });
+
+      // ── Token Toggle ───────────────────────────────────────────────────
+      tokenToggle.addEventListener('click', function () {
+        var isPassword = tokenInput.type === 'password';
+        tokenInput.type = isPassword ? 'text' : 'password';
+        tokenToggle.innerHTML = isPassword ? '&#128064;' : '&#128065;';
+      });
+
+      // ── Browse Directory ───────────────────────────────────────────────
+      browseBtn.addEventListener('click', async function () {
+        var selected = await window.api.selectDirectory();
+        if (selected) {
+          dirInput.value = selected;
+        }
+      });
+
+      // ── Save ───────────────────────────────────────────────────────────
+      saveBtn.addEventListener('click', async function () {
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+
+        try {
+          // Basic settings
+          var newRepoUrl = repoUrlInput.value.trim();
+          var newToken = tokenInput.value.trim();
+          var newDir = dirInput.value.trim();
+          var newInterval = parseInt(intervalInput.value, 10);
+          var newLaunch = launchCheckbox.checked;
+          var newNotif = notifCheckbox.checked;
+
+          // Clamp interval
+          if (isNaN(newInterval) || newInterval < 10) newInterval = 10;
+          if (newInterval > 300) newInterval = 300;
+
+          // Gather tracked profiles from checkboxes
+          var newTracked = { printer: [], filament: [], print: [] };
+          var types = ['printer', 'filament', 'print'];
+
+          for (var i = 0; i < types.length; i++) {
+            var type = types[i];
+            var checkboxes = document.querySelectorAll('#list-' + type + ' .checkbox-input:checked');
+            for (var j = 0; j < checkboxes.length; j++) {
+              newTracked[type].push(checkboxes[j].getAttribute('data-profile-name'));
+            }
+          }
+
+          // Save each changed value
+          if (newRepoUrl !== originalConfig.repoUrl) {
+            await window.api.setConfig('repoUrl', newRepoUrl);
+          }
+          if (newToken !== originalConfig.githubToken) {
+            await window.api.setConfig('githubToken', newToken);
+          }
+          if (newDir !== originalConfig.prusaslicerDataDir) {
+            await window.api.setConfig('prusaslicerDataDir', newDir);
+          }
+          if (newInterval !== originalConfig.syncIntervalSeconds) {
+            await window.api.setConfig('syncIntervalSeconds', newInterval);
+          }
+          if (newLaunch !== originalConfig.launchOnStartup) {
+            await window.api.setConfig('launchOnStartup', newLaunch);
+          }
+          if (newNotif !== originalConfig.showNotifications) {
+            await window.api.setConfig('showNotifications', newNotif);
+          }
+
+          // Always save tracked profiles (deep comparison is more trouble than it is worth)
+          await window.api.setConfig('trackedProfiles', newTracked);
+
+          // Show saved confirmation
+          savedMsg.classList.add('visible');
+          setTimeout(function () {
+            savedMsg.classList.remove('visible');
+          }, 2500);
+
+          // Update originalConfig so subsequent saves only diff changes
+          originalConfig = await window.api.getConfig();
+
+        } catch (err) {
+          console.error('Failed to save settings:', err);
+          alert('Failed to save settings: ' + (err.message || String(err)));
+        } finally {
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save';
+        }
+      });
+
+      // ── Cancel ─────────────────────────────────────────────────────────
+      cancelBtn.addEventListener('click', function () {
+        window.api.closeWindow();
+      });
+
+      // ── Helpers ────────────────────────────────────────────────────────
+      function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      function escapeAttr(text) {
+        return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+
+      // ── Init ───────────────────────────────────────────────────────────
+      init();
+    })();
+  </script>
+</body>
+</html>

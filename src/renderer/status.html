@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PrusaSlicer Profile Sync — Status</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .status-window {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      padding: 20px 24px;
+    }
+
+    .sync-status-block {
+      text-align: center;
+      padding: 16px 0 20px;
+      border-bottom: 1px solid var(--border-color);
+      margin-bottom: 16px;
+    }
+
+    .sync-status-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 6px;
+    }
+
+    .sync-status-label {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+    }
+
+    .syncing-indicator {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 10px;
+      color: var(--gold);
+      font-size: 0.85rem;
+    }
+
+    .syncing-indicator.visible {
+      display: flex;
+    }
+
+    .stats-row {
+      margin-bottom: 16px;
+    }
+
+    .log-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      margin-bottom: 12px;
+    }
+
+    .log-section .section-title {
+      flex-shrink: 0;
+    }
+
+    .log-section .log-container {
+      flex: 1;
+      max-height: none;
+      min-height: 100px;
+    }
+
+    .footer-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-top: 12px;
+      border-top: 1px solid var(--border-color);
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="status-window">
+    <!-- Last Sync — Prominent -->
+    <div class="sync-status-block">
+      <div class="sync-status-label">Last Sync</div>
+      <div class="sync-status-row">
+        <span id="status-time" class="status-large">
+          <span class="status-time never">Never</span>
+        </span>
+      </div>
+      <div>
+        <span id="status-badge"></span>
+      </div>
+      <div id="status-error" class="hidden" style="margin-top: 8px;">
+        <span class="status-large">
+          <span class="status-error-msg" id="error-message"></span>
+        </span>
+      </div>
+      <div id="syncing-indicator" class="syncing-indicator">
+        <span class="spinner"></span>
+        <span>Syncing...</span>
+      </div>
+    </div>
+
+    <!-- Stats Row -->
+    <div class="stats-row">
+      <div class="card-row">
+        <div class="card">
+          <div class="card-label">Tracked Profiles</div>
+          <div class="card-value" id="stat-profiles">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Watching</div>
+          <div class="card-value" id="stat-watching">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Sync Interval</div>
+          <div class="card-value" id="stat-interval">--</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Activity Log -->
+    <div class="log-section">
+      <div class="section-title">Activity Log</div>
+      <div class="log-container" id="activity-log">
+        <div class="log-empty">No activity yet</div>
+      </div>
+    </div>
+
+    <!-- Footer Actions -->
+    <div class="footer-actions">
+      <button type="button" id="sync-btn" class="btn btn-primary">
+        Sync Now
+      </button>
+      <button type="button" id="close-btn" class="btn btn-secondary">Close</button>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const statusTimeEl = document.getElementById('status-time');
+      const statusBadgeEl = document.getElementById('status-badge');
+      const statusErrorEl = document.getElementById('status-error');
+      const errorMessageEl = document.getElementById('error-message');
+      const syncingIndicator = document.getElementById('syncing-indicator');
+
+      const statProfiles = document.getElementById('stat-profiles');
+      const statWatching = document.getElementById('stat-watching');
+      const statInterval = document.getElementById('stat-interval');
+
+      const logContainer = document.getElementById('activity-log');
+      const syncBtn = document.getElementById('sync-btn');
+      const closeBtn = document.getElementById('close-btn');
+
+      // ── Relative Time ──────────────────────────────────────────────────
+      function relativeTime(isoString) {
+        if (!isoString) return 'Never';
+
+        const then = new Date(isoString);
+        const now = new Date();
+        const diffMs = now - then;
+        const diffSec = Math.floor(diffMs / 1000);
+
+        if (diffSec < 5) return 'Just now';
+        if (diffSec < 60) return diffSec + ' seconds ago';
+
+        const diffMin = Math.floor(diffSec / 60);
+        if (diffMin === 1) return '1 minute ago';
+        if (diffMin < 60) return diffMin + ' minutes ago';
+
+        const diffHr = Math.floor(diffMin / 60);
+        if (diffHr === 1) return '1 hour ago';
+        if (diffHr < 24) return diffHr + ' hours ago';
+
+        const diffDays = Math.floor(diffHr / 24);
+        if (diffDays === 1) return 'Yesterday';
+        return diffDays + ' days ago';
+      }
+
+      // ── Render Status ──────────────────────────────────────────────────
+      function renderStatus(status) {
+        // Last sync time
+        const timeText = relativeTime(status.lastSync);
+        const stateClass = status.lastSyncStatus === 'ok' ? 'ok'
+          : status.lastSyncStatus === 'error' ? 'error'
+          : 'never';
+
+        statusTimeEl.innerHTML = '<span class="status-time ' + stateClass + '">' + timeText + '</span>';
+
+        // Badge
+        if (status.lastSyncStatus === 'ok') {
+          statusBadgeEl.innerHTML = '<span class="badge badge-success">SYNCED</span>';
+        } else if (status.lastSyncStatus === 'error') {
+          statusBadgeEl.innerHTML = '<span class="badge badge-error">ERROR</span>';
+        } else {
+          statusBadgeEl.innerHTML = '<span class="badge badge-muted">NEVER</span>';
+        }
+
+        // Error message
+        if (status.lastSyncStatus === 'error' && status.lastError) {
+          errorMessageEl.textContent = status.lastError;
+          statusErrorEl.classList.remove('hidden');
+        } else {
+          statusErrorEl.classList.add('hidden');
+        }
+
+        // Syncing indicator
+        if (status.syncInProgress) {
+          syncingIndicator.classList.add('visible');
+          syncBtn.disabled = true;
+        } else {
+          syncingIndicator.classList.remove('visible');
+          syncBtn.disabled = false;
+        }
+
+        // Watching status
+        statWatching.textContent = status.isWatching ? 'Active' : 'Stopped';
+        statWatching.style.color = status.isWatching ? 'var(--success)' : 'var(--text-muted)';
+      }
+
+      // ── Render Log ─────────────────────────────────────────────────────
+      function renderLog(entries) {
+        if (!entries || entries.length === 0) {
+          logContainer.innerHTML = '<div class="log-empty">No activity yet</div>';
+          return;
+        }
+
+        logContainer.innerHTML = entries.map(function (entry) {
+          const time = new Date(entry.timestamp);
+          const ts = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          return '<div class="log-entry">'
+            + '<span class="log-timestamp">' + ts + '</span>'
+            + '<span class="log-message">' + escapeHtml(entry.message) + '</span>'
+            + '</div>';
+        }).join('');
+
+        // Scroll to bottom (latest entries are first in array, rendered top-to-bottom)
+        logContainer.scrollTop = 0;
+      }
+
+      function appendLogEntry(entry) {
+        // Remove empty placeholder if present
+        const empty = logContainer.querySelector('.log-empty');
+        if (empty) empty.remove();
+
+        const time = new Date(entry.timestamp);
+        const ts = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+        const div = document.createElement('div');
+        div.className = 'log-entry';
+        div.innerHTML = '<span class="log-timestamp">' + ts + '</span>'
+          + '<span class="log-message">' + escapeHtml(entry.message) + '</span>';
+
+        // Prepend so newest is at top
+        logContainer.insertBefore(div, logContainer.firstChild);
+
+        // Keep log container scrolled to top (newest)
+        logContainer.scrollTop = 0;
+      }
+
+      function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      // ── Load Data ──────────────────────────────────────────────────────
+      async function loadAll() {
+        try {
+          const [status, config, log] = await Promise.all([
+            window.api.getStatus(),
+            window.api.getConfig(),
+            window.api.getActivityLog()
+          ]);
+
+          renderStatus(status);
+          renderLog(log);
+
+          // Profile count
+          const tracked = config.trackedProfiles || { printer: [], filament: [], print: [] };
+          const total = (tracked.printer || []).length
+            + (tracked.filament || []).length
+            + (tracked.print || []).length;
+          statProfiles.textContent = total;
+
+          // Sync interval
+          const interval = config.syncIntervalSeconds || 30;
+          statInterval.textContent = 'Every ' + interval + 's';
+        } catch (err) {
+          console.error('Failed to load status:', err);
+        }
+      }
+
+      // ── Events ─────────────────────────────────────────────────────────
+      syncBtn.addEventListener('click', async () => {
+        syncBtn.disabled = true;
+        syncingIndicator.classList.add('visible');
+
+        try {
+          await window.api.syncNow();
+        } catch (err) {
+          console.error('Sync failed:', err);
+        }
+
+        // Refresh status after sync
+        const status = await window.api.getStatus();
+        renderStatus(status);
+      });
+
+      closeBtn.addEventListener('click', () => {
+        window.api.closeWindow();
+      });
+
+      // Real-time updates
+      window.api.onSyncUpdate(function (entry) {
+        appendLogEntry(entry);
+
+        // Refresh status on every sync update
+        window.api.getStatus().then(renderStatus);
+      });
+
+      // Refresh relative time every 30 seconds
+      setInterval(async () => {
+        const status = await window.api.getStatus();
+        renderStatus(status);
+      }, 30000);
+
+      // Initial load
+      loadAll();
+    })();
+  </script>
+</body>
+</html>

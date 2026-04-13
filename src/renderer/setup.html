@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PrusaSlicer Profile Sync — Setup</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .setup-window {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      padding: 32px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .setup-header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+
+    .setup-header .logo {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 14px;
+      background: var(--gold-dim);
+      border-radius: var(--radius-lg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.8rem;
+    }
+
+    .setup-header h1 {
+      font-size: 1.4rem;
+      margin-bottom: 6px;
+    }
+
+    .setup-header p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+
+    .setup-form {
+      flex: 1;
+    }
+
+    .setup-footer {
+      padding-top: 20px;
+      margin-top: 8px;
+      text-align: center;
+    }
+
+    .setup-footer .btn-primary {
+      padding: 10px 40px;
+      font-size: 1rem;
+    }
+
+    .setup-error {
+      background: var(--error-dim);
+      color: var(--error);
+      padding: 10px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 0.85rem;
+      margin-bottom: 16px;
+      display: none;
+    }
+
+    .setup-error.visible {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="setup-window">
+    <!-- Header -->
+    <div class="setup-header">
+      <div class="logo">&#9881;</div>
+      <h1>Welcome to PrusaSlicer Profile Sync</h1>
+      <p>Sync your slicer profiles between machines via Git</p>
+    </div>
+
+    <!-- Error banner -->
+    <div id="setup-error" class="setup-error"></div>
+
+    <!-- Form -->
+    <div class="setup-form">
+      <!-- Repository URL -->
+      <div class="form-group">
+        <label for="repo-url">GitHub Repository URL</label>
+        <input
+          type="text"
+          id="repo-url"
+          class="form-input"
+          value="https://github.com/3dprintpittsburgh/prusaslicer-profiles.git"
+          placeholder="https://github.com/user/repo.git"
+          spellcheck="false"
+        >
+      </div>
+
+      <!-- GitHub Token -->
+      <div class="form-group">
+        <label for="github-token">GitHub Personal Access Token</label>
+        <input
+          type="password"
+          id="github-token"
+          class="form-input"
+          placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+          spellcheck="false"
+        >
+        <div class="form-hint">
+          Create at <a href="https://github.com/settings/tokens" title="GitHub Token Settings">github.com/settings/tokens</a> — needs <strong>repo</strong> scope
+        </div>
+      </div>
+
+      <!-- PrusaSlicer Data Directory -->
+      <div class="form-group">
+        <label for="prusa-dir">PrusaSlicer Data Directory</label>
+        <div class="form-row">
+          <input
+            type="text"
+            id="prusa-dir"
+            class="form-input"
+            placeholder="/path/to/PrusaSlicer"
+            spellcheck="false"
+          >
+          <button type="button" id="browse-btn" class="btn btn-secondary">Browse</button>
+        </div>
+        <div id="detected-dir" class="detected-path hidden">
+          Auto-detected
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="setup-footer">
+      <button type="button" id="start-btn" class="btn btn-primary">Get Started</button>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const repoUrlInput = document.getElementById('repo-url');
+      const tokenInput = document.getElementById('github-token');
+      const dirInput = document.getElementById('prusa-dir');
+      const browseBtn = document.getElementById('browse-btn');
+      const startBtn = document.getElementById('start-btn');
+      const errorBanner = document.getElementById('setup-error');
+      const detectedDiv = document.getElementById('detected-dir');
+
+      // Load existing config to pre-fill auto-detected directory
+      async function init() {
+        try {
+          const config = await window.api.getConfig();
+
+          if (config.prusaslicerDataDir) {
+            dirInput.value = config.prusaslicerDataDir;
+            detectedDiv.textContent = 'Auto-detected: ' + config.prusaslicerDataDir;
+            detectedDiv.classList.remove('hidden');
+          }
+
+          if (config.repoUrl) {
+            repoUrlInput.value = config.repoUrl;
+          }
+
+          if (config.githubToken) {
+            tokenInput.value = config.githubToken;
+          }
+        } catch (err) {
+          console.error('Failed to load config:', err);
+        }
+      }
+
+      // Show error
+      function showError(msg) {
+        errorBanner.textContent = msg;
+        errorBanner.classList.add('visible');
+      }
+
+      function clearError() {
+        errorBanner.classList.remove('visible');
+      }
+
+      // Browse for directory
+      browseBtn.addEventListener('click', async () => {
+        const selected = await window.api.selectDirectory();
+        if (selected) {
+          dirInput.value = selected;
+          detectedDiv.classList.add('hidden');
+        }
+      });
+
+      // Validate and finish setup
+      startBtn.addEventListener('click', async () => {
+        clearError();
+
+        const repoUrl = repoUrlInput.value.trim();
+        const token = tokenInput.value.trim();
+        const dir = dirInput.value.trim();
+
+        // Validation
+        if (!repoUrl) {
+          showError('Please enter a GitHub repository URL.');
+          repoUrlInput.focus();
+          return;
+        }
+
+        if (!repoUrl.match(/^https?:\/\/.+\/.+/)) {
+          showError('Please enter a valid repository URL (https://github.com/user/repo.git).');
+          repoUrlInput.focus();
+          return;
+        }
+
+        if (!token) {
+          showError('Please enter a GitHub Personal Access Token.');
+          tokenInput.focus();
+          return;
+        }
+
+        if (!dir) {
+          showError('Please specify your PrusaSlicer data directory.');
+          dirInput.focus();
+          return;
+        }
+
+        // Disable button while saving
+        startBtn.disabled = true;
+        startBtn.textContent = 'Setting up...';
+
+        try {
+          await window.api.finishSetup({
+            repoUrl: repoUrl,
+            githubToken: token,
+            prusaslicerDataDir: dir
+          });
+        } catch (err) {
+          showError('Setup failed: ' + (err.message || String(err)));
+          startBtn.disabled = false;
+          startBtn.textContent = 'Get Started';
+        }
+      });
+
+      // Allow Enter key to submit
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !startBtn.disabled) {
+          startBtn.click();
+        }
+      });
+
+      init();
+    })();
+  </script>
+</body>
+</html>
