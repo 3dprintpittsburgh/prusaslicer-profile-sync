@@ -1,4 +1,4 @@
-const Store = require('electron-store');
+const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -16,40 +16,48 @@ const defaults = {
   launchOnStartup: false
 };
 
-let store = null;
+// Simple JSON file store (replaces electron-store to avoid ESM issues)
+let _data = null;
 
-function initStore() {
-  if (!store) {
-    store = new Store({
-      name: 'prusaslicer-sync-config',
-      defaults
-    });
-  }
-  return store;
+function configPath() {
+  return path.join(app.getPath('userData'), 'config.json');
 }
 
-function getStore() {
-  return initStore();
+function load() {
+  if (_data) return _data;
+  try {
+    const raw = fs.readFileSync(configPath(), 'utf-8');
+    _data = { ...defaults, ...JSON.parse(raw) };
+  } catch {
+    _data = { ...defaults };
+  }
+  return _data;
+}
+
+function save() {
+  try {
+    const dir = path.dirname(configPath());
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(configPath(), JSON.stringify(_data, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[CONFIG] Save failed:', err.message);
+  }
 }
 
 function getConfig() {
-  const s = initStore();
-  const config = {};
-  for (const key of Object.keys(defaults)) {
-    config[key] = s.get(key);
-  }
-  return config;
+  return { ...load() };
 }
 
 function setConfig(key, value) {
-  const s = initStore();
-  s.set(key, value);
+  load();
+  _data[key] = value;
+  save();
 }
 
-/**
- * Detect the PrusaSlicer data directory based on the current platform.
- * Returns the first existing path found, or null if none found.
- */
+function getStore() {
+  return { get: (k) => load()[k], set: (k, v) => setConfig(k, v) };
+}
+
 function detectPrusaSlicerDir() {
   const platform = process.platform;
   const candidates = [];
@@ -66,69 +74,46 @@ function detectPrusaSlicerDir() {
       path.join(os.homedir(), '.config', 'PrusaSlicer'),
       path.join(xdgConfig, 'PrusaSlicer')
     );
-    // Deduplicate in case XDG_CONFIG_HOME is ~/.config
   } else if (platform === 'darwin') {
     candidates.push(
       path.join(os.homedir(), 'Library', 'Application Support', 'PrusaSlicer')
     );
   }
 
-  // Deduplicate paths
   const seen = new Set();
   for (const candidate of candidates) {
     const resolved = path.resolve(candidate);
     if (seen.has(resolved)) continue;
     seen.add(resolved);
-
     try {
-      const stat = fs.statSync(resolved);
-      if (stat.isDirectory()) {
-        return resolved;
-      }
+      if (fs.statSync(resolved).isDirectory()) return resolved;
     } catch {
-      // Directory doesn't exist, try next
+      // not found
     }
   }
-
   return null;
 }
 
-/**
- * Scan the PrusaSlicer data directory for available .ini profiles.
- * Returns { printer: [...], filament: [...], print: [...] } with profile names (no .ini extension).
- */
 function getAvailableProfiles() {
-  const s = initStore();
-  const dataDir = s.get('prusaslicerDataDir');
+  const dataDir = load().prusaslicerDataDir;
   const result = { printer: [], filament: [], print: [] };
-
   if (!dataDir) return result;
 
-  const types = ['printer', 'filament', 'print'];
-
-  for (const type of types) {
-    const dir = path.join(dataDir, type);
+  for (const type of ['printer', 'filament', 'print']) {
     try {
-      const files = fs.readdirSync(dir);
-      result[type] = files
+      result[type] = fs.readdirSync(path.join(dataDir, type))
         .filter(f => f.endsWith('.ini'))
         .map(f => f.replace(/\.ini$/, ''))
         .sort();
     } catch {
-      // Directory doesn't exist or can't be read
       result[type] = [];
     }
   }
-
   return result;
 }
 
-/**
- * Check if a specific profile is being tracked for sync.
- */
 function isProfileTracked(type, name) {
-  const s = initStore();
-  const tracked = s.get('trackedProfiles') || { printer: [], filament: [], print: [] };
+  const tracked = load().trackedProfiles || {};
   return Array.isArray(tracked[type]) && tracked[type].includes(name);
 }
 
