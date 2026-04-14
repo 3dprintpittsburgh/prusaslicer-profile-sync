@@ -13,5 +13,8 @@ contextBridge.exposeInMainWorld('api', {
   },
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
   closeWindow: () => ipcRenderer.invoke('close-window'),
-  finishSetup: (config) => ipcRenderer.invoke('finish-setup', config)
+  finishSetup: (config) => ipcRenderer.invoke('finish-setup', config),
+  checkDeps: () => ipcRenderer.invoke('check-deps'),
+  installDep: (name) => ipcRenderer.invoke('install-dep', name),
+  depsContinue: () => ipcRenderer.invoke('deps-continue')
 });

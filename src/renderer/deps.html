@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PrusaSlicer Profile Sync — Dependencies</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .deps-container { max-width: 520px; width: 100%; padding: 2rem; }
+    .deps-header { text-align: center; margin-bottom: 2rem; }
+    .deps-header h1 { font-size: 1.4rem; color: var(--gold); margin-bottom: 0.5rem; }
+    .deps-header p { color: var(--text-muted); font-size: 0.9rem; }
+
+    .dep-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.2rem;
+      margin-bottom: 1rem;
+    }
+    .dep-card.satisfied { border-left: 4px solid var(--success); }
+    .dep-card.missing { border-left: 4px solid var(--error); }
+
+    .dep-row { display: flex; align-items: center; justify-content: space-between; }
+    .dep-info h3 { font-size: 1rem; margin: 0 0 0.25rem 0; }
+    .dep-info .version { font-size: 0.8rem; color: var(--success); }
+    .dep-info .missing-text { font-size: 0.8rem; color: var(--error); }
+    .dep-info .description { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.3rem; }
+
+    .dep-status { font-size: 1.5rem; }
+
+    .dep-actions { margin-top: 0.8rem; }
+    .dep-actions .instructions { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem; line-height: 1.4; }
+
+    .install-progress {
+      font-size: 0.85rem;
+      color: var(--gold);
+      margin-top: 0.5rem;
+      display: none;
+    }
+    .install-progress.visible { display: block; }
+
+    .btn-row { display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 1.5rem; }
+  </style>
+</head>
+<body>
+  <div class="deps-container">
+    <div class="deps-header">
+      <h1>Checking Dependencies</h1>
+      <p>PrusaSlicer Profile Sync needs a few things before it can run.</p>
+    </div>
+
+    <div id="deps-list"></div>
+
+    <div id="all-good" style="display:none; text-align:center; padding:1rem;">
+      <p style="color:var(--success); font-size:1.1rem; font-weight:600;">All dependencies satisfied!</p>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="btn-recheck">Re-check</button>
+      <button class="btn btn-primary" id="btn-continue" disabled>Continue →</button>
+    </div>
+  </div>
+
+  <script>
+    const depsList = document.getElementById('deps-list');
+    const allGood = document.getElementById('all-good');
+    const btnContinue = document.getElementById('btn-continue');
+    const btnRecheck = document.getElementById('btn-recheck');
+
+    const platformLabels = {
+      win32: 'Windows',
+      darwin: 'macOS',
+      linux: 'Linux'
+    };
+
+    async function checkDeps() {
+      const result = await window.api.checkDeps();
+      depsList.innerHTML = '';
+
+      for (const [key, dep] of Object.entries(result.deps)) {
+        const card = document.createElement('div');
+        card.className = `dep-card ${dep.installed ? 'satisfied' : 'missing'}`;
+
+        let statusHtml = dep.installed
+          ? '<span class="dep-status">&#10003;</span>'
+          : '<span class="dep-status" style="color:var(--error)">&#10007;</span>';
+
+        let versionHtml = dep.installed
+          ? `<div class="version">${dep.version}</div>`
+          : '<div class="missing-text">Not installed</div>';
+
+        let actionsHtml = '';
+        if (!dep.installed) {
+          actionsHtml = `
+            <div class="dep-actions">
+              <button class="btn btn-primary btn-sm" onclick="installDep('${key}', this)">Install ${dep.name}</button>
+              <div class="install-progress" id="progress-${key}"></div>
+              <div class="instructions">${dep.installInstructions[navigator.platform === 'MacIntel' ? 'darwin' : (navigator.platform.startsWith('Win') ? 'win32' : 'linux')]}</div>
+            </div>`;
+        }
+
+        card.innerHTML = `
+          <div class="dep-row">
+            <div class="dep-info">
+              <h3>${dep.name}</h3>
+              ${versionHtml}
+              <div class="description">${dep.description}</div>
+            </div>
+            ${statusHtml}
+          </div>
+          ${actionsHtml}
+        `;
+
+        depsList.appendChild(card);
+      }
+
+      if (result.allSatisfied) {
+        allGood.style.display = 'block';
+        btnContinue.disabled = false;
+      } else {
+        allGood.style.display = 'none';
+        btnContinue.disabled = true;
+      }
+    }
+
+    async function installDep(name, btn) {
+      btn.disabled = true;
+      btn.textContent = 'Installing...';
+
+      const progress = document.getElementById(`progress-${name}`);
+      progress.classList.add('visible');
+      progress.textContent = 'Downloading installer...';
+
+      const result = await window.api.installDep(name);
+
+      if (result.success) {
+        progress.textContent = result.message;
+        progress.style.color = 'var(--success)';
+        btn.textContent = 'Installer Launched';
+      } else {
+        progress.textContent = result.error;
+        progress.style.color = 'var(--error)';
+        btn.disabled = false;
+        btn.textContent = `Retry Install`;
+      }
+    }
+
+    btnRecheck.addEventListener('click', checkDeps);
+    btnContinue.addEventListener('click', () => window.api.depsContinue());
+
+    // Initial check
+    checkDeps();
+  </script>
+</body>
+</html>

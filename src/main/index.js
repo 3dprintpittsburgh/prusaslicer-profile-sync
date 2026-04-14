@@ -1,5 +1,9 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
+const { execFile, execSync } = require('child_process');
+const fs = require('fs');
+const https = require('https');
+const os = require('os');
 const {
   getConfig,
   setConfig,
@@ -15,6 +19,97 @@ const {
 } = require('./sync');
 const { startWatcher, stopWatcher, isWatching } = require('./watcher');
 const { createTray, setTrayState, destroyTray } = require('./tray');
+
+// ── Dependency checking ────────────────────────────────────────────────
+
+function checkGitInstalled() {
+  try {
+    const result = execSync('git --version', { encoding: 'utf-8', timeout: 5000 });
+    return { installed: true, version: result.trim() };
+  } catch {
+    return { installed: false, version: null };
+  }
+}
+
+function checkAllDependencies() {
+  const git = checkGitInstalled();
+  return {
+    allSatisfied: git.installed,
+    deps: {
+      git: {
+        name: 'Git',
+        installed: git.installed,
+        version: git.version,
+        required: true,
+        description: 'Required for syncing profiles between machines',
+        installUrl: {
+          win32: 'https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/Git-2.47.1.2-64-bit.exe',
+          darwin: null,  // Use xcode-select --install
+          linux: null    // Use package manager
+        },
+        installInstructions: {
+          win32: 'Click "Install Git" to download and run the installer. Use default settings.',
+          darwin: 'Open Terminal and run: xcode-select --install',
+          linux: 'Open a terminal and run: sudo apt install git (Debian/Ubuntu) or sudo dnf install git (Fedora)'
+        }
+      }
+    }
+  };
+}
+
+// Download a file to a temp path, returns the file path
+function downloadFile(url, filename) {
+  return new Promise((resolve, reject) => {
+    const tmpPath = path.join(os.tmpdir(), filename);
+    const file = fs.createWriteStream(tmpPath);
+
+    const request = (url) => {
+      https.get(url, (response) => {
+        // Follow redirects
+        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+          request(response.headers.location);
+          return;
+        }
+        if (response.statusCode !== 200) {
+          reject(new Error(`Download failed: HTTP ${response.statusCode}`));
+          return;
+        }
+        response.pipe(file);
+        file.on('finish', () => {
+          file.close();
+          resolve(tmpPath);
+        });
+      }).on('error', reject);
+    };
+
+    request(url);
+  });
+}
+
+let depsWindow = null;
+
+function showDepsWindow() {
+  if (depsWindow && !depsWindow.isDestroyed()) {
+    depsWindow.focus();
+    return;
+  }
+
+  depsWindow = new BrowserWindow({
+    width: 600,
+    height: 480,
+    resizable: false,
+    frame: true,
+    skipTaskbar: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  depsWindow.loadFile(path.join(__dirname, '..', 'renderer', 'deps.html'));
+  depsWindow.on('closed', () => { depsWindow = null; });
+}
 
 // ── In-memory activity log ──────────────────────────────────────────────
 
@@ -246,6 +341,58 @@ function registerIpcHandlers() {
     }
   });
 
+  ipcMain.handle('check-deps', () => {
+    return checkAllDependencies();
+  });
+
+  ipcMain.handle('install-dep', async (event, depName) => {
+    const deps = checkAllDependencies().deps;
+    const dep = deps[depName];
+    if (!dep) return { success: false, error: 'Unknown dependency' };
+
+    const platform = process.platform;
+
+    // macOS: open terminal instruction
+    if (platform === 'darwin') {
+      if (depName === 'git') {
+        try {
+          execSync('xcode-select --install', { timeout: 5000 });
+          return { success: true, message: 'Xcode Command Line Tools installer launched' };
+        } catch {
+          return { success: false, error: 'Please open Terminal and run: xcode-select --install' };
+        }
+      }
+    }
+
+    // Linux: provide instructions (can't auto-install without sudo)
+    if (platform === 'linux') {
+      shell.openExternal('https://git-scm.com/download/linux');
+      return { success: true, message: 'Opened Git download page. Install via your package manager.' };
+    }
+
+    // Windows: download and run installer
+    if (platform === 'win32' && dep.installUrl.win32) {
+      try {
+        const installerPath = await downloadFile(dep.installUrl.win32, 'Git-Setup.exe');
+        // Launch the installer (not silent - let user see and approve)
+        execFile(installerPath, [], { detached: true, stdio: 'ignore' });
+        return { success: true, message: 'Git installer launched. Complete the installation, then click "Re-check".' };
+      } catch (err) {
+        // Fallback: open download page in browser
+        shell.openExternal('https://git-scm.com/download/win');
+        return { success: false, error: `Auto-download failed. Opened download page instead. Error: ${err.message}` };
+      }
+    }
+
+    return { success: false, error: 'Auto-install not available for this platform. Please install manually.' };
+  });
+
+  ipcMain.handle('deps-continue', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) win.close();
+    continueAfterDeps();
+  });
+
   ipcMain.handle('finish-setup', async (event, setupConfig) => {
     // Apply all setup configuration values
     if (setupConfig.repoUrl) setConfig('repoUrl', setupConfig.repoUrl);
@@ -339,15 +486,25 @@ app.whenReady().then(async () => {
     app.setLoginItemSettings({ openAtLogin: true });
   }
 
-  // Check if first run (no repoUrl configured)
+  // Check dependencies before anything else
+  const depsResult = checkAllDependencies();
+  if (!depsResult.allSatisfied) {
+    logActivity('Missing dependencies detected - showing dependency installer');
+    showDepsWindow();
+  } else {
+    continueAfterDeps();
+  }
+});
+
+function continueAfterDeps() {
+  const config = getConfig();
   if (!config.repoUrl) {
     logActivity('First run detected - showing setup wizard');
     showSetupWindow();
   } else {
-    // Normal startup - initialize everything
-    await initializeAfterSetup();
+    initializeAfterSetup();
   }
-});
+}
 
 app.on('before-quit', () => {
   stopSyncTimer();
