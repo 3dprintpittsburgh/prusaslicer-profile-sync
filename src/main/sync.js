@@ -65,6 +65,9 @@ async function ensureRepo() {
       // Update remote URL in case token changed
       const authUrl = buildAuthUrl();
       await git.remote(['set-url', 'origin', authUrl]);
+      // Ensure git identity is configured (fix for repos cloned before this was added)
+      await git.addConfig('user.email', 'prusaslicer-sync@3dprintpgh.com');
+      await git.addConfig('user.name', 'PrusaSlicer Sync');
       return { success: true, action: 'validated' };
     } catch (err) {
       // Invalid repo, remove and re-clone
@@ -77,6 +80,11 @@ async function ensureRepo() {
     const authUrl = buildAuthUrl();
     fs.mkdirSync(dir, { recursive: true });
     await simpleGit().clone(authUrl, dir);
+
+    // Configure git identity for this repo (required for commits)
+    const git = getGit();
+    await git.addConfig('user.email', 'prusaslicer-sync@3dprintpgh.com');
+    await git.addConfig('user.name', 'PrusaSlicer Sync');
 
     // Ensure profile type directories exist in the repo
     for (const type of PROFILE_TYPES) {
