@@ -1,6 +1,6 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Notification } = require('electron');
 const path = require('path');
-const { execFile, execSync } = require('child_process');
+const { execFile, execSync, spawn } = require('child_process');
 const fs = require('fs');
 const https = require('https');
 const os = require('os');
@@ -109,6 +109,109 @@ function showDepsWindow() {
 
   depsWindow.loadFile(path.join(__dirname, '..', 'renderer', 'deps.html'));
   depsWindow.on('closed', () => { depsWindow = null; });
+}
+
+// ── PrusaSlicer process detection & restart ─────────────────────────────
+
+const PRUSASLICER_PROCESS_NAMES = [
+  'prusa-slicer', 'prusaslicer', 'PrusaSlicer', 'prusa-slicer-console',
+  'prusa-slicer.exe', 'PrusaSlicer.exe'
+];
+
+function findPrusaSlicerProcess() {
+  try {
+    if (process.platform === 'win32') {
+      const output = execSync(
+        'wmic process where "name like \'%prusa%slicer%\'" get ProcessId,ExecutablePath /format:csv',
+        { encoding: 'utf-8', timeout: 5000, windowsHide: true }
+      );
+      const lines = output.trim().split('\n').filter(l => l.includes(',') && l.toLowerCase().includes('slicer'));
+      if (lines.length === 0) return null;
+      // Parse CSV: Node,ExecutablePath,ProcessId
+      const parts = lines[0].split(',');
+      const exePath = parts.length >= 2 ? parts[1].trim() : null;
+      const pid = parts.length >= 3 ? parseInt(parts[2].trim()) : null;
+      return exePath && pid ? { pid, exePath } : null;
+    } else {
+      // Linux/macOS: use pgrep
+      const output = execSync('pgrep -a -i prusaslicer 2>/dev/null || pgrep -a -i prusa-slicer 2>/dev/null || true', {
+        encoding: 'utf-8', timeout: 5000
+      });
+      const line = output.trim().split('\n')[0];
+      if (!line) return null;
+      const parts = line.split(/\s+/);
+      const pid = parseInt(parts[0]);
+      const exePath = parts.slice(1).join(' ');
+      return pid ? { pid, exePath } : null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+function killPrusaSlicer(pid) {
+  try {
+    if (process.platform === 'win32') {
+      execSync(`taskkill /PID ${pid}`, { timeout: 5000, windowsHide: true });
+    } else {
+      process.kill(pid, 'SIGTERM');
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function launchPrusaSlicer(exePath) {
+  try {
+    const child = spawn(exePath, [], { detached: true, stdio: 'ignore' });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function notifyPrusaSlicerRestart(changedProfileNames) {
+  const psProcess = findPrusaSlicerProcess();
+  if (!psProcess) return; // Not running, no action needed
+
+  const { getConfig: gc } = require('./config');
+  if (!gc().showNotifications) return;
+
+  const profileList = changedProfileNames.slice(0, 3).join(', ');
+  const extra = changedProfileNames.length > 3 ? ` +${changedProfileNames.length - 3} more` : '';
+
+  const notification = new Notification({
+    title: 'PrusaSlicer Profiles Updated',
+    body: `${profileList}${extra} changed by another machine.\nClick to restart PrusaSlicer and apply changes.`,
+    icon: path.join(__dirname, '..', '..', 'assets', 'icon.png'),
+    urgency: 'normal',
+    silent: false
+  });
+
+  notification.on('click', () => {
+    const currentProcess = findPrusaSlicerProcess();
+    if (currentProcess) {
+      logActivity(`Restarting PrusaSlicer (PID ${currentProcess.pid})...`);
+      const exePath = currentProcess.exePath;
+      if (killPrusaSlicer(currentProcess.pid)) {
+        // Wait a moment for the process to exit, then relaunch
+        setTimeout(() => {
+          if (launchPrusaSlicer(exePath)) {
+            logActivity('PrusaSlicer restarted successfully');
+          } else {
+            logActivity('Failed to relaunch PrusaSlicer — please open it manually');
+          }
+        }, 2000);
+      } else {
+        logActivity('Failed to close PrusaSlicer — please restart it manually');
+      }
+    }
+  });
+
+  notification.show();
+  logActivity(`PrusaSlicer is running — sent restart notification for ${changedProfileNames.length} updated profile(s)`);
 }
 
 // ── In-memory activity log ──────────────────────────────────────────────
@@ -237,6 +340,16 @@ async function performSync(source) {
     if (result.changedFiles.length > 0) {
       logActivity(`Sync complete: ${result.changedFiles.length} file(s) changed`);
       result.changedFiles.forEach(f => logActivity(`  ${f}`));
+
+      // Check if any profiles were PULLED (incoming from another machine)
+      // and PrusaSlicer is running — offer to restart
+      const pulledProfiles = result.changedFiles
+        .filter(f => f.startsWith('pulled: '))
+        .map(f => f.replace('pulled: ', '').replace('.ini', ''));
+
+      if (pulledProfiles.length > 0) {
+        notifyPrusaSlicerRestart(pulledProfiles);
+      }
     } else {
       logActivity('Sync complete: everything up to date');
     }
