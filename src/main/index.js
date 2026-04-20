@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Notification } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { execFile, execSync, spawn } = require('child_process');
 const fs = require('fs');
@@ -212,6 +213,65 @@ function notifyPrusaSlicerRestart(changedProfileNames) {
 
   notification.show();
   logActivity(`PrusaSlicer is running — sent restart notification for ${changedProfileNames.length} updated profile(s)`);
+}
+
+// ── Auto-updater ───────────────────────────────────────────────────────
+
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+let updateStatus = { state: 'idle', version: null, progress: null, error: null };
+
+autoUpdater.on('checking-for-update', () => {
+  updateStatus = { state: 'checking', version: null, progress: null, error: null };
+  logActivity('Checking for updates...');
+});
+
+autoUpdater.on('update-available', (info) => {
+  updateStatus = { state: 'downloading', version: info.version, progress: 0, error: null };
+  logActivity(`Update available: v${info.version} — downloading...`);
+
+  const notification = new Notification({
+    title: 'Update Available',
+    body: `PrusaSlicer Profile Sync v${info.version} is downloading. It will install on next restart.`,
+    icon: path.join(__dirname, '..', '..', 'assets', 'icon.png')
+  });
+  notification.show();
+});
+
+autoUpdater.on('update-not-available', () => {
+  updateStatus = { state: 'up-to-date', version: app.getVersion(), progress: null, error: null };
+  logActivity(`App is up to date (v${app.getVersion()})`);
+});
+
+autoUpdater.on('download-progress', (progress) => {
+  updateStatus.progress = Math.round(progress.percent);
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+  updateStatus = { state: 'ready', version: info.version, progress: 100, error: null };
+  logActivity(`Update v${info.version} downloaded — will install on next restart`);
+
+  const notification = new Notification({
+    title: 'Update Ready',
+    body: `v${info.version} will install when you restart the app. Click to restart now.`,
+    icon: path.join(__dirname, '..', '..', 'assets', 'icon.png')
+  });
+  notification.on('click', () => {
+    autoUpdater.quitAndInstall(false, true);
+  });
+  notification.show();
+});
+
+autoUpdater.on('error', (err) => {
+  updateStatus = { state: 'error', version: null, progress: null, error: err.message };
+  logActivity(`Update check failed: ${err.message}`);
+});
+
+function checkForUpdates() {
+  autoUpdater.checkForUpdates().catch(err => {
+    logActivity(`Update check failed: ${err.message}`);
+  });
 }
 
 // ── In-memory activity log ──────────────────────────────────────────────
@@ -454,6 +514,26 @@ function registerIpcHandlers() {
     }
   });
 
+  ipcMain.handle('check-for-updates', () => {
+    checkForUpdates();
+    return { checking: true };
+  });
+
+  ipcMain.handle('get-update-status', () => {
+    return updateStatus;
+  });
+
+  ipcMain.handle('install-update', () => {
+    if (updateStatus.state === 'ready') {
+      autoUpdater.quitAndInstall(false, true);
+    }
+    return { installing: updateStatus.state === 'ready' };
+  });
+
+  ipcMain.handle('get-app-version', () => {
+    return app.getVersion();
+  });
+
   ipcMain.handle('check-deps', () => {
     return checkAllDependencies();
   });
@@ -558,6 +638,9 @@ async function initializeAfterSetup() {
 
   // Do an initial sync
   await performSync('startup');
+
+  // Check for app updates (delayed to not compete with initial sync)
+  setTimeout(() => checkForUpdates(), 10000);
 }
 
 // ── App lifecycle ───────────────────────────────────────────────────────
@@ -586,6 +669,7 @@ app.whenReady().then(async () => {
     onSyncNow: () => performSync('manual'),
     onSettings: () => showSettingsWindow(),
     onStatus: () => showStatusWindow(),
+    onCheckUpdate: () => checkForUpdates(),
     onQuit: () => {
       stopSyncTimer();
       stopWatcher();

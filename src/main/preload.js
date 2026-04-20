@@ -16,5 +16,9 @@ contextBridge.exposeInMainWorld('api', {
   finishSetup: (config) => ipcRenderer.invoke('finish-setup', config),
   checkDeps: () => ipcRenderer.invoke('check-deps'),
   installDep: (name) => ipcRenderer.invoke('install-dep', name),
-  depsContinue: () => ipcRenderer.invoke('deps-continue')
+  depsContinue: () => ipcRenderer.invoke('deps-continue'),
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  getUpdateStatus: () => ipcRenderer.invoke('get-update-status'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version')
 });

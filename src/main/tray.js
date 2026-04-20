@@ -132,6 +132,14 @@ function buildContextMenu() {
         }
       }
     },
+    {
+      label: 'Check for Updates...',
+      click: () => {
+        if (typeof callbacks.onCheckUpdate === 'function') {
+          callbacks.onCheckUpdate();
+        }
+      }
+    },
     { type: 'separator' },
     {
       label: 'Quit',
