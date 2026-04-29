@@ -1,6 +1,6 @@
 {
   "name": "prusaslicer-profile-sync",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Cross-platform PrusaSlicer profile sync via Git",
   "main": "src/main/index.js",
   "scripts": {

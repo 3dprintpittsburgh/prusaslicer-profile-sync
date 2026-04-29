@@ -477,7 +477,7 @@ function registerIpcHandlers() {
     return getConfig();
   });
 
-  ipcMain.handle('set-config', (event, key, value) => {
+  ipcMain.handle('set-config', async (event, key, value) => {
     setConfig(key, value);
 
     // Handle side effects for specific config changes
@@ -487,6 +487,38 @@ function registerIpcHandlers() {
 
     if (key === 'launchOnStartup') {
       app.setLoginItemSettings({ openAtLogin: !!value });
+    }
+
+    // When tracked profiles are set for the first time, check for conflicts
+    if (key === 'trackedProfiles' && !getConfig().firstSyncDone) {
+      const totalTracked = Object.values(value || {}).flat().length;
+      if (totalTracked > 0) {
+        logActivity(`Profiles selected (${totalTracked}) — checking for conflicts...`);
+
+        // Make sure repo is pulled so we can compare
+        try {
+          const repoResult = await ensureRepo();
+          if (repoResult.success) {
+            const git = require('simple-git')(getRepoDir());
+            await git.fetch('origin', 'main');
+            await git.pull('origin', 'main', { '--strategy-option': 'theirs' });
+          }
+        } catch (err) {
+          logActivity(`Pre-conflict pull failed: ${err.message}`);
+        }
+
+        const conflicts = await detectConflicts();
+        if (conflicts.length > 0) {
+          logActivity(`Found ${conflicts.length} conflict(s) — showing resolution window`);
+          showConflictWindow();
+          return { success: true, conflicts: conflicts.length };
+        }
+
+        // No conflicts — mark done and do first sync
+        setConfig('firstSyncDone', true);
+        logActivity('No conflicts — starting first sync');
+        performSync('first-sync');
+      }
     }
 
     return { success: true };
@@ -679,29 +711,14 @@ async function initializeAfterSetup() {
 
   const config = getConfig();
 
-  // First sync on a new machine: check for conflicts before syncing
+  // On first run, don't start syncing until the user picks profiles in Settings.
+  // The conflict check is triggered by set-config('trackedProfiles') when firstSyncDone is false.
   if (!config.firstSyncDone) {
-    logActivity('First sync — checking for conflicts...');
-
-    // Pull remote first so we can compare
-    try {
-      const git = require('simple-git')(getRepoDir());
-      await git.fetch('origin', 'main');
-      await git.pull('origin', 'main', { '--strategy-option': 'theirs' });
-    } catch (err) {
-      logActivity(`Initial pull failed: ${err.message}`);
+    const totalTracked = Object.values(config.trackedProfiles || {}).flat().length;
+    if (totalTracked === 0) {
+      logActivity('Waiting for profile selection in Settings before first sync...');
+      return; // Don't start sync timer — wait for user to pick profiles
     }
-
-    const conflicts = await detectConflicts();
-    if (conflicts.length > 0) {
-      logActivity(`Found ${conflicts.length} conflict(s) — showing resolution window`);
-      showConflictWindow();
-      return; // Don't start sync timer yet — wait for resolution
-    }
-
-    // No conflicts — mark first sync done and continue
-    setConfig('firstSyncDone', true);
-    logActivity('No conflicts detected');
   }
 
   // Start file watcher
