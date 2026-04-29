@@ -122,30 +122,39 @@ const PRUSASLICER_PROCESS_NAMES = [
 ];
 
 function findPrusaSlicerProcess() {
+  const myPid = process.pid;
   try {
     if (process.platform === 'win32') {
       const output = execSync(
         'wmic process where "name like \'%prusa%slicer%\'" get ProcessId,ExecutablePath /format:csv',
         { encoding: 'utf-8', timeout: 5000, windowsHide: true }
       );
-      const lines = output.trim().split('\n').filter(l => l.includes(',') && l.toLowerCase().includes('slicer'));
+      const lines = output.trim().split('\n').filter(l => {
+        if (!l.includes(',')) return false;
+        const lower = l.toLowerCase();
+        // Must contain "slicer" but NOT be our sync app
+        return lower.includes('slicer') && !lower.includes('sync') && !lower.includes('profile');
+      });
       if (lines.length === 0) return null;
-      // Parse CSV: Node,ExecutablePath,ProcessId
       const parts = lines[0].split(',');
       const exePath = parts.length >= 2 ? parts[1].trim() : null;
       const pid = parts.length >= 3 ? parseInt(parts[2].trim()) : null;
-      return exePath && pid ? { pid, exePath } : null;
+      if (!exePath || !pid || pid === myPid) return null;
+      return { pid, exePath };
     } else {
-      // Linux/macOS: use pgrep
       const output = execSync('pgrep -a -i prusaslicer 2>/dev/null || pgrep -a -i prusa-slicer 2>/dev/null || true', {
         encoding: 'utf-8', timeout: 5000
       });
-      const line = output.trim().split('\n')[0];
-      if (!line) return null;
-      const parts = line.split(/\s+/);
+      const lines = output.trim().split('\n').filter(l => {
+        const lower = l.toLowerCase();
+        return lower && !lower.includes('sync') && !lower.includes('profile');
+      });
+      if (lines.length === 0) return null;
+      const parts = lines[0].split(/\s+/);
       const pid = parseInt(parts[0]);
+      if (!pid || pid === myPid) return null;
       const exePath = parts.slice(1).join(' ');
-      return pid ? { pid, exePath } : null;
+      return { pid, exePath };
     }
   } catch {
     return null;
