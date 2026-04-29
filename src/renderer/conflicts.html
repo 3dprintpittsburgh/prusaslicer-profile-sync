@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PrusaSlicer Profile Sync — Resolve Conflicts</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    body { display: flex; flex-direction: column; min-height: 100vh; }
+    .conflicts-container { flex: 1; display: flex; flex-direction: column; padding: 20px 24px; max-width: 100%; }
+
+    .header { margin-bottom: 16px; }
+    .header h1 { font-size: 1.3rem; color: var(--gold); margin: 0 0 6px 0; }
+    .header p { color: var(--text-muted); font-size: 0.85rem; margin: 0; line-height: 1.4; }
+
+    .bulk-actions {
+      display: flex; gap: 8px; align-items: center;
+      margin-bottom: 12px; padding: 10px 14px;
+      background: var(--bg-card, #1e293b); border-radius: 6px;
+    }
+    .bulk-actions span { color: var(--text-muted); font-size: 0.8rem; margin-right: auto; }
+
+    .conflict-list { flex: 1; overflow-y: auto; margin-bottom: 14px; }
+
+    .conflict-item {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border-color, #2a2a3e);
+    }
+    .conflict-item:hover { background: rgba(253, 184, 39, 0.04); }
+
+    .conflict-info { min-width: 0; }
+    .conflict-name { font-size: 0.9rem; font-weight: 600; color: var(--text, #e0e0e0); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .conflict-type { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+    .conflict-dates {
+      display: flex; gap: 20px; font-size: 0.8rem;
+    }
+    .date-col { text-align: center; min-width: 120px; }
+    .date-label { color: var(--text-muted); font-size: 0.7rem; margin-bottom: 2px; }
+    .date-value { color: var(--text, #e0e0e0); }
+    .date-value.newer { color: var(--success, #22c55e); font-weight: 600; }
+
+    .conflict-choice {
+      display: flex; gap: 4px;
+    }
+    .choice-btn {
+      padding: 5px 12px; border: 1px solid var(--border-color, #444);
+      border-radius: 4px; cursor: pointer; font-size: 0.8rem;
+      background: transparent; color: var(--text-muted); transition: all 0.15s;
+    }
+    .choice-btn:hover { border-color: var(--gold); color: var(--gold); }
+    .choice-btn.selected-local { background: #164e1e; border-color: #22c55e; color: #22c55e; }
+    .choice-btn.selected-remote { background: #1e3a5f; border-color: #3b82f6; color: #3b82f6; }
+
+    .footer {
+      display: flex; align-items: center; gap: 8px;
+      padding-top: 12px; border-top: 1px solid var(--border-color);
+    }
+    .footer .summary { flex: 1; font-size: 0.8rem; color: var(--text-muted); }
+
+    .section-header {
+      padding: 6px 14px; font-size: 0.75rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--gold); background: rgba(253, 184, 39, 0.08);
+      border-bottom: 1px solid var(--border-color, #2a2a3e);
+    }
+  </style>
+</head>
+<body>
+  <div class="conflicts-container">
+    <div class="header">
+      <h1>Profile Conflicts Detected</h1>
+      <p>These profiles exist on both this computer and in the shared repo with different content. Choose which version to keep for each one.</p>
+    </div>
+
+    <div class="bulk-actions">
+      <span id="conflict-count">0 conflicts</span>
+      <button class="btn btn-sm btn-secondary" id="btn-all-local">Keep All Local</button>
+      <button class="btn btn-sm btn-secondary" id="btn-all-remote">Keep All Remote</button>
+      <button class="btn btn-sm btn-secondary" id="btn-all-newer">Keep All Newer</button>
+    </div>
+
+    <div class="conflict-list" id="conflict-list"></div>
+
+    <div class="footer">
+      <div class="summary" id="summary"></div>
+      <button class="btn btn-secondary" id="btn-skip">Skip (sync normally)</button>
+      <button class="btn btn-primary" id="btn-resolve">Apply & Sync</button>
+    </div>
+  </div>
+
+  <script>
+    let conflicts = [];
+
+    function formatDate(isoString) {
+      if (!isoString) return 'Unknown';
+      const d = new Date(isoString);
+      const now = new Date();
+      const diffMs = now - d;
+      const diffDays = Math.floor(diffMs / 86400000);
+
+      const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const date = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+      if (diffDays === 0) return `Today ${time}`;
+      if (diffDays === 1) return `Yesterday ${time}`;
+      if (diffDays < 7) return `${diffDays}d ago ${time}`;
+      return `${date} ${time}`;
+    }
+
+    function renderConflicts() {
+      const list = document.getElementById('conflict-list');
+      list.innerHTML = '';
+
+      // Group by type
+      const grouped = {};
+      for (const c of conflicts) {
+        if (!grouped[c.type]) grouped[c.type] = [];
+        grouped[c.type].push(c);
+      }
+
+      for (const [type, items] of Object.entries(grouped)) {
+        const header = document.createElement('div');
+        header.className = 'section-header';
+        header.textContent = `${type.charAt(0).toUpperCase() + type.slice(1)} Profiles (${items.length})`;
+        list.appendChild(header);
+
+        for (const c of items) {
+          const row = document.createElement('div');
+          row.className = 'conflict-item';
+          row.dataset.relPath = c.relPath;
+
+          const localNewer = c.localNewer;
+          const remoteNewer = !c.localNewer;
+
+          row.innerHTML = `
+            <div class="conflict-info">
+              <div class="conflict-name">${c.name}</div>
+              <div class="conflict-type">${c.type}</div>
+            </div>
+            <div class="conflict-dates">
+              <div class="date-col">
+                <div class="date-label">This Computer</div>
+                <div class="date-value ${localNewer ? 'newer' : ''}">${formatDate(c.localModified)}${localNewer ? ' ★' : ''}</div>
+              </div>
+              <div class="date-col">
+                <div class="date-label">Shared Repo</div>
+                <div class="date-value ${remoteNewer ? 'newer' : ''}">${formatDate(c.repoModified)}${remoteNewer ? ' ★' : ''}</div>
+              </div>
+            </div>
+            <div class="conflict-choice">
+              <button class="choice-btn ${c.resolution === 'local' ? 'selected-local' : ''}"
+                      onclick="setResolution('${c.relPath}', 'local', this)">Local</button>
+              <button class="choice-btn ${c.resolution === 'remote' ? 'selected-remote' : ''}"
+                      onclick="setResolution('${c.relPath}', 'remote', this)">Remote</button>
+            </div>
+          `;
+          list.appendChild(row);
+        }
+      }
+
+      updateSummary();
+    }
+
+    function setResolution(relPath, resolution, btn) {
+      const conflict = conflicts.find(c => c.relPath === relPath);
+      if (conflict) conflict.resolution = resolution;
+
+      // Update button states in the row
+      const row = btn.closest('.conflict-item');
+      row.querySelectorAll('.choice-btn').forEach(b => {
+        b.className = 'choice-btn';
+      });
+      btn.className = `choice-btn selected-${resolution}`;
+      updateSummary();
+    }
+
+    function setAll(resolution) {
+      conflicts.forEach(c => {
+        if (resolution === 'newer') {
+          c.resolution = c.localNewer ? 'local' : 'remote';
+        } else {
+          c.resolution = resolution;
+        }
+      });
+      renderConflicts();
+    }
+
+    function updateSummary() {
+      const local = conflicts.filter(c => c.resolution === 'local').length;
+      const remote = conflicts.filter(c => c.resolution === 'remote').length;
+      document.getElementById('summary').textContent =
+        `${local} keep local, ${remote} keep remote`;
+    }
+
+    // Bulk buttons
+    document.getElementById('btn-all-local').addEventListener('click', () => setAll('local'));
+    document.getElementById('btn-all-remote').addEventListener('click', () => setAll('remote'));
+    document.getElementById('btn-all-newer').addEventListener('click', () => setAll('newer'));
+
+    // Resolve button
+    document.getElementById('btn-resolve').addEventListener('click', async () => {
+      const btn = document.getElementById('btn-resolve');
+      btn.disabled = true;
+      btn.textContent = 'Resolving...';
+
+      const resolutions = conflicts.map(c => ({
+        relPath: c.relPath,
+        resolution: c.resolution
+      }));
+
+      await window.api.resolveConflicts(resolutions);
+    });
+
+    // Skip button
+    document.getElementById('btn-skip').addEventListener('click', async () => {
+      await window.api.skipConflicts();
+    });
+
+    // Load conflicts on page open
+    (async function() {
+      conflicts = await window.api.detectConflicts();
+      document.getElementById('conflict-count').textContent =
+        `${conflicts.length} conflict${conflicts.length !== 1 ? 's' : ''}`;
+      renderConflicts();
+    })();
+  </script>
+</body>
+</html>

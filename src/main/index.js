@@ -16,7 +16,9 @@ const {
   ensureRepo,
   fullSync,
   listRemoteProfiles,
-  isSyncInProgress
+  isSyncInProgress,
+  detectConflicts,
+  resolveAndSync
 } = require('./sync');
 const { startWatcher, stopWatcher, isWatching } = require('./watcher');
 const { createTray, setTrayState, destroyTray } = require('./tray');
@@ -301,6 +303,30 @@ const preloadPath = path.join(__dirname, 'preload.js');
 let setupWindow = null;
 let settingsWindow = null;
 let statusWindow = null;
+let conflictWindow = null;
+
+function showConflictWindow() {
+  if (conflictWindow && !conflictWindow.isDestroyed()) {
+    conflictWindow.focus();
+    return;
+  }
+
+  conflictWindow = new BrowserWindow({
+    width: 800,
+    height: 600,
+    resizable: true,
+    frame: true,
+    skipTaskbar: false,
+    webPreferences: {
+      preload: preloadPath,
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  conflictWindow.loadFile(path.join(__dirname, '..', 'renderer', 'conflicts.html'));
+  conflictWindow.on('closed', () => { conflictWindow = null; });
+}
 
 function showSetupWindow() {
   if (setupWindow && !setupWindow.isDestroyed()) {
@@ -534,6 +560,36 @@ function registerIpcHandlers() {
     return app.getVersion();
   });
 
+  ipcMain.handle('detect-conflicts', async () => {
+    return await detectConflicts();
+  });
+
+  ipcMain.handle('resolve-conflicts', async (event, resolutions) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) win.close();
+
+    logActivity(`Resolving ${resolutions.length} conflict(s)...`);
+    const result = await resolveAndSync(resolutions);
+
+    if (result.success) {
+      logActivity(`Conflicts resolved: ${result.changedFiles.length} file(s) updated`);
+      result.changedFiles.forEach(f => logActivity(`  ${f}`));
+      // Continue with normal app initialization
+      await initializeAfterSetup();
+    } else {
+      logActivity(`Conflict resolution failed: ${result.error}`);
+    }
+
+    return result;
+  });
+
+  ipcMain.handle('skip-conflicts', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) win.close();
+    setConfig('firstSyncDone', true);
+    await initializeAfterSetup();
+  });
+
   ipcMain.handle('check-deps', () => {
     return checkAllDependencies();
   });
@@ -621,8 +677,34 @@ async function initializeAfterSetup() {
     return;
   }
 
-  // Start file watcher
   const config = getConfig();
+
+  // First sync on a new machine: check for conflicts before syncing
+  if (!config.firstSyncDone) {
+    logActivity('First sync — checking for conflicts...');
+
+    // Pull remote first so we can compare
+    try {
+      const git = require('simple-git')(getRepoDir());
+      await git.fetch('origin', 'main');
+      await git.pull('origin', 'main', { '--strategy-option': 'theirs' });
+    } catch (err) {
+      logActivity(`Initial pull failed: ${err.message}`);
+    }
+
+    const conflicts = await detectConflicts();
+    if (conflicts.length > 0) {
+      logActivity(`Found ${conflicts.length} conflict(s) — showing resolution window`);
+      showConflictWindow();
+      return; // Don't start sync timer yet — wait for resolution
+    }
+
+    // No conflicts — mark first sync done and continue
+    setConfig('firstSyncDone', true);
+    logActivity('No conflicts detected');
+  }
+
+  // Start file watcher
   if (config.prusaslicerDataDir) {
     try {
       startWatcher(handleFileChanges);

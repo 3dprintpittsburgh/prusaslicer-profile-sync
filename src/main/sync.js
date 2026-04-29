@@ -287,6 +287,142 @@ async function fullSync() {
 }
 
 /**
+ * Detect conflicts between local PrusaSlicer profiles and repo versions.
+ * Returns an array of conflict objects for the UI to resolve.
+ * Each conflict: { type, name, relPath, localModified, repoModified, localNewer, recommendation }
+ */
+async function detectConflicts() {
+  const config = getConfig();
+  const { prusaslicerDataDir, trackedProfiles } = config;
+  const dir = getRepoDir();
+  const git = getGit();
+  const conflicts = [];
+
+  if (!prusaslicerDataDir) return conflicts;
+
+  for (const type of PROFILE_TYPES) {
+    const names = trackedProfiles[type] || [];
+    for (const name of names) {
+      const localFile = path.join(prusaslicerDataDir, type, `${name}.ini`);
+      const repoFile = path.join(dir, type, `${name}.ini`);
+      const relPath = `${type}/${name}.ini`;
+
+      const localExists = fs.existsSync(localFile);
+      const repoExists = fs.existsSync(repoFile);
+
+      // Only a conflict if both exist
+      if (!localExists || !repoExists) continue;
+
+      // Check if content actually differs
+      const localContent = fs.readFileSync(localFile, 'utf-8');
+      const repoContent = fs.readFileSync(repoFile, 'utf-8');
+      if (localContent === repoContent) continue;
+
+      // Get local file modification time
+      const localStat = fs.statSync(localFile);
+      const localModified = localStat.mtime;
+
+      // Get repo file's last commit date
+      let repoModified = null;
+      try {
+        const log = await git.log({ file: relPath, n: 1 });
+        if (log.latest) {
+          repoModified = new Date(log.latest.date);
+        }
+      } catch {
+        // File might be new in repo, use file mtime as fallback
+        const repoStat = fs.statSync(repoFile);
+        repoModified = repoStat.mtime;
+      }
+
+      const localNewer = repoModified ? localModified > repoModified : true;
+
+      conflicts.push({
+        type,
+        name,
+        relPath,
+        localModified: localModified.toISOString(),
+        repoModified: repoModified ? repoModified.toISOString() : null,
+        localNewer,
+        recommendation: localNewer ? 'local' : 'remote',
+        // Default resolution: keep the newer version
+        resolution: localNewer ? 'local' : 'remote',
+      });
+    }
+  }
+
+  return conflicts;
+}
+
+/**
+ * Apply conflict resolutions and then do a normal sync.
+ * resolutions: array of { relPath, resolution: 'local' | 'remote' }
+ */
+async function resolveAndSync(resolutions) {
+  if (syncInProgress) {
+    return { success: false, changedFiles: [], error: 'Sync already in progress' };
+  }
+
+  syncInProgress = true;
+  const config = getConfig();
+  const { prusaslicerDataDir } = config;
+  const dir = getRepoDir();
+  const git = getGit();
+  const changedFiles = [];
+
+  try {
+    for (const { relPath, resolution } of resolutions) {
+      const localFile = path.join(prusaslicerDataDir, relPath);
+      const repoFile = path.join(dir, relPath);
+
+      if (resolution === 'local') {
+        // Copy local → repo (local wins)
+        if (fs.existsSync(localFile)) {
+          const destDir = path.dirname(repoFile);
+          if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+          fs.copyFileSync(localFile, repoFile);
+          changedFiles.push(`resolved (keep local): ${relPath}`);
+        }
+      } else {
+        // Copy repo → local (remote wins)
+        if (fs.existsSync(repoFile)) {
+          const destDir = path.dirname(localFile);
+          if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+          fs.copyFileSync(repoFile, localFile);
+          changedFiles.push(`resolved (keep remote): ${relPath}`);
+        }
+      }
+    }
+
+    // Commit any local-wins to the repo
+    const status = await git.status();
+    if (status.modified.length > 0 || status.not_added.length > 0) {
+      await git.add('.');
+      await git.commit('Sync: Resolve conflicts from new machine setup');
+      await git.push('origin', 'main');
+    }
+
+    // Now do a normal pull to get everything in sync
+    await gitPull();
+    const pullResult = await pullToLocal();
+    changedFiles.push(...pullResult.copiedFiles.map(f => `pulled: ${f}`));
+
+    setConfig('lastSync', new Date().toISOString());
+    setConfig('lastSyncStatus', 'ok');
+    setConfig('lastError', null);
+    setConfig('firstSyncDone', true);
+
+    syncInProgress = false;
+    return { success: true, changedFiles, error: null };
+  } catch (err) {
+    setConfig('lastSyncStatus', 'error');
+    setConfig('lastError', err.message);
+    syncInProgress = false;
+    return { success: false, changedFiles, error: err.message };
+  }
+}
+
+/**
  * Get information about the last commit in the repo.
  */
 async function getLastCommitInfo() {
@@ -348,5 +484,7 @@ module.exports = {
   getLastCommitInfo,
   listRemoteProfiles,
   isSyncInProgress,
-  getRepoDir
+  getRepoDir,
+  detectConflicts,
+  resolveAndSync
 };
